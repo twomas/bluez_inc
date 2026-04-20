@@ -238,6 +238,7 @@ g_ptr_array_add(adv_service_uuids, BLP_SERVICE_UUID);
 advertisement = binc_advertisement_create();
 binc_advertisement_set_local_name(advertisement, "BINC2");
 binc_advertisement_set_services(advertisement, adv_service_uuids);
+binc_advertisement_set_type(advertisement, BINC_ADVERTISEMENT_TYPE_PERIPHERAL);
         
 // Start advertising
 binc_adapter_start_advertising(default_adapter, advertisement);
@@ -245,6 +246,15 @@ g_ptr_array_free(adv_service_uuids, TRUE);
 ```
 
 The library also supports setting *manufacturer data* and *service data*.
+
+For non-connectable advertising, set the advertisement type to broadcast:
+
+```c
+advertisement = binc_advertisement_create();
+binc_advertisement_set_local_name(advertisement, "BINC-BEACON");
+binc_advertisement_set_type(advertisement, BINC_ADVERTISEMENT_TYPE_BROADCAST);
+binc_adapter_start_advertising(default_adapter, advertisement);
+```
 
 ## Adding services and characteristics
 In order to make your peripheral work you need to create an 'app' in Bluez terminology. The steps are:
