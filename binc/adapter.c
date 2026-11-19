@@ -94,6 +94,7 @@ struct binc_adapter {
     AdapterDeviceRemovalCallback deviceRemovalCallback;
     AdapterDiscoveryStateChangeCallback discoveryStateCallback;
     AdapterPoweredStateChangeCallback poweredStateCallback;
+    AdapterAliasChangedCallback aliasChangedCallback;
     RemoteCentralConnectionStateCallback centralStateCallback;
     void *user_data; // Borrowed
     GHashTable *devices_cache; // Owned
@@ -247,6 +248,15 @@ static void binc_internal_adapter_changed(__attribute__((unused)) GDBusConnectio
             adapter->connectable = g_variant_get_boolean(property_value);
         } else if (g_str_equal(property_name, ADAPTER_PROPERTY_PAIRABLE)) {
             adapter->pairable = g_variant_get_boolean(property_value);
+        } else if (g_str_equal(property_name, ADAPTER_PROPERTY_ALIAS)) {
+            const char *alias = g_variant_get_string(property_value, NULL);
+            if (g_strcmp0(alias, adapter->alias) != 0) {
+                g_free((char *) adapter->alias);
+                adapter->alias = g_strdup(alias);
+                if (adapter->aliasChangedCallback != NULL) {
+                    adapter->aliasChangedCallback(adapter, adapter->alias);
+                }
+            }
         }
     }
 
@@ -569,6 +579,17 @@ const char *binc_adapter_get_name(const Adapter *adapter) {
 const char *binc_adapter_get_address(const Adapter *adapter) {
     g_assert(adapter != NULL);
     return adapter->address;
+}
+
+const char *binc_adapter_get_alias(const Adapter *adapter) {
+    g_assert(adapter != NULL);
+    return adapter->alias;
+}
+
+void binc_adapter_set_alias_changed_cb(Adapter *adapter, AdapterAliasChangedCallback callback) {
+    g_assert(adapter != NULL);
+    g_assert(callback != NULL);
+    adapter->aliasChangedCallback = callback;
 }
 
 static Adapter *binc_adapter_create(GDBusConnection *connection, const char *path) {

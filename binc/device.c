@@ -43,6 +43,9 @@ static const char *const DEVICE_PROPERTY_ADDRESS_TYPE = "AddressType";
 static const char *const DEVICE_PROPERTY_ALIAS = "Alias";
 static const char *const DEVICE_PROPERTY_NAME = "Name";
 static const char *const DEVICE_PROPERTY_PAIRED = "Paired";
+static const char *const DEVICE_PROPERTY_BONDED = "Bonded";
+
+static void binc_internal_update_bonding_state(Device *device);
 static const char *const DEVICE_PROPERTY_RSSI = "RSSI";
 static const char *const DEVICE_PROPERTY_UUIDS = "UUIDs";
 static const char *const DEVICE_PROPERTY_MANUFACTURER_DATA = "ManufacturerData";
@@ -73,6 +76,8 @@ struct binc_device {
     gboolean services_resolved;
     gboolean service_discovery_started;
     gboolean paired;
+    gboolean bonded;
+    gboolean bonded_known; // BlueZ >= 5.72 reports Bonded; older versions only Paired
     BondingState bondingState;
     const char *path; // Owned
     const char *name; // Owned
@@ -586,12 +591,17 @@ static void binc_device_changed(__attribute__((unused)) GDBusConnection *conn,
         } else if (g_str_equal(property_name, DEVICE_PROPERTY_PAIRED)) {
             device->paired = g_variant_get_boolean(property_value);
             log_debug(TAG, "Paired %s", device->paired ? "true" : "false");
-            binc_device_set_bonding_state(device, device->paired ? BINC_BONDED : BINC_BOND_NONE);
+            binc_internal_update_bonding_state(device);
 
             // If gatt-tree has not been built yet, start building it
             if (device->services == NULL && device->services_resolved && !device->service_discovery_started) {
                 binc_collect_gatt_tree(device);
             }
+        } else if (g_str_equal(property_name, DEVICE_PROPERTY_BONDED)) {
+            device->bonded = g_variant_get_boolean(property_value);
+            device->bonded_known = TRUE;
+            log_debug(TAG, "Bonded %s", device->bonded ? "true" : "false");
+            binc_internal_update_bonding_state(device);
         }
     }
 
@@ -1023,10 +1033,29 @@ gboolean binc_device_get_paired(const Device *device) {
     return device->paired;
 }
 
+static void binc_internal_update_bonding_state(Device *device) {
+    // Bonded (keys stored) is what "bonded" means; Paired can be true for a pairing without
+    // stored keys. Use Paired only on BlueZ versions that don't report Bonded.
+    const gboolean bonded = device->bonded_known ? device->bonded : device->paired;
+    binc_device_set_bonding_state(device, bonded ? BINC_BONDED : BINC_BOND_NONE);
+}
+
 void binc_device_set_paired(Device *device, gboolean paired) {
     g_assert(device != NULL);
     device->paired = paired;
-    binc_device_set_bonding_state(device, paired ? BINC_BONDED : BINC_BOND_NONE);
+    binc_internal_update_bonding_state(device);
+}
+
+gboolean binc_device_get_bonded(const Device *device) {
+    g_assert(device != NULL);
+    return device->bonded_known ? device->bonded : device->paired;
+}
+
+void binc_device_set_bonded(Device *device, gboolean bonded) {
+    g_assert(device != NULL);
+    device->bonded = bonded;
+    device->bonded_known = TRUE;
+    binc_internal_update_bonding_state(device);
 }
 
 short binc_device_get_rssi(const Device *device) {
@@ -1153,6 +1182,8 @@ void binc_internal_device_update_property(Device *device, const char *property_n
         binc_device_set_name(device, g_variant_get_string(property_value, NULL));
     } else if (g_str_equal(property_name, DEVICE_PROPERTY_PAIRED)) {
         binc_device_set_paired(device, g_variant_get_boolean(property_value));
+    } else if (g_str_equal(property_name, DEVICE_PROPERTY_BONDED)) {
+        binc_device_set_bonded(device, g_variant_get_boolean(property_value));
     } else if (g_str_equal(property_name, DEVICE_PROPERTY_RSSI)) {
         binc_device_set_rssi(device, g_variant_get_int16(property_value));
     } else if (g_str_equal(property_name, DEVICE_PROPERTY_TRUSTED)) {

@@ -43,6 +43,8 @@ typedef void (*AdapterDiscoveryStateChangeCallback)(Adapter *adapter, DiscoveryS
 
 typedef void (*AdapterPoweredStateChangeCallback)(Adapter *adapter, gboolean state);
 
+typedef void (*AdapterAliasChangedCallback)(Adapter *adapter, const char *alias);
+
 typedef void (*RemoteCentralConnectionStateCallback)(Adapter *adapter, Device *device);
 
 
@@ -111,6 +113,8 @@ void binc_adapter_set_device_removal_cb(Adapter *adapter, AdapterDeviceRemovalCa
 void binc_adapter_set_discovery_state_cb(Adapter *adapter, AdapterDiscoveryStateChangeCallback callback);
 
 void binc_adapter_set_powered_state_cb(Adapter *adapter, AdapterPoweredStateChangeCallback callback);
+
+void binc_adapter_set_alias_changed_cb(Adapter *adapter, AdapterAliasChangedCallback callback);
 
 GDBusConnection *binc_adapter_get_dbus_connection(const Adapter *adapter);
 

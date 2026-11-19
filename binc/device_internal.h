@@ -46,6 +46,8 @@ void binc_device_set_path(Device *device, const char *path);
 
 void binc_device_set_paired(Device *device, gboolean paired);
 
+void binc_device_set_bonded(Device *device, gboolean bonded);
+
 void binc_device_set_rssi(Device *device, short rssi);
 
 void binc_device_set_trusted(Device *device, gboolean trusted);

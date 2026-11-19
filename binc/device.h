@@ -119,6 +119,11 @@ const char *binc_device_get_path(const Device *device);
 
 gboolean binc_device_get_paired(const Device *device);
 
+/**
+ * Bonded: keys for this device are stored. Uses BlueZ's Bonded property (5.72+), Paired before that.
+ */
+gboolean binc_device_get_bonded(const Device *device);
+
 short binc_device_get_rssi(const Device *device);
 
 gboolean binc_device_get_trusted(const Device *device);
