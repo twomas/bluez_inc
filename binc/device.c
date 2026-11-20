@@ -755,6 +755,9 @@ void binc_device_disconnect(Device *device) {
 
     log_debug(TAG, "Disconnecting '%s' (%s)", device->name, device->address);
 
+    // A link that was already up when we started was never connect()ed here, so nothing
+    // watches its properties yet; without this its DISCONNECTED state is never reported.
+    subscribe_prop_changed(device);
     binc_device_internal_set_conn_state(device, BINC_DISCONNECTING, NULL);
     g_dbus_connection_call(device->connection,
                            BLUEZ_DBUS,
@@ -1184,6 +1187,17 @@ void binc_internal_device_update_property(Device *device, const char *property_n
         binc_device_set_paired(device, g_variant_get_boolean(property_value));
     } else if (g_str_equal(property_name, DEVICE_PROPERTY_BONDED)) {
         binc_device_set_bonded(device, g_variant_get_boolean(property_value));
+    } else if (g_str_equal(property_name, DEVICE_PROPERTY_SERVICES_RESOLVED)) {
+        // A device that is already linked when we start (connected by another program, or
+        // left up by an earlier one): load its GATT tree and follow its state, as connect()
+        // would, so callers can see its characteristics and get its disconnect reported.
+        // A device we connect() is followed by binc_device_changed, which loads the tree itself.
+        device->services_resolved = g_variant_get_boolean(property_value);
+        if (device->services_resolved && device->device_prop_changed == 0 &&
+            device->services == NULL && !device->service_discovery_started) {
+            subscribe_prop_changed(device);
+            binc_collect_gatt_tree(device);
+        }
     } else if (g_str_equal(property_name, DEVICE_PROPERTY_RSSI)) {
         binc_device_set_rssi(device, g_variant_get_int16(property_value));
     } else if (g_str_equal(property_name, DEVICE_PROPERTY_TRUSTED)) {
