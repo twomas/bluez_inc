@@ -27,6 +27,7 @@
 #include "logger.h"
 #include "utility.h"
 #include "advertisement.h"
+#include "advertisement_internal.h"
 #include "application.h"
 
 static const char *const TAG = "Adapter";
@@ -1097,23 +1098,24 @@ Advertisement *binc_adapter_get_advertisement(const Adapter *adapter) {
 	return adapter->advertisement;
 }
 
-static void binc_internal_start_advertising_cb(__attribute__((unused)) GObject *source_object,
+static void binc_internal_start_advertising_cb(GObject *source_object,
                                                GAsyncResult *res,
                                                gpointer user_data) {
-    Adapter *adapter = (Adapter *) user_data;
-    g_assert(adapter != NULL);
+    Advertisement *advertisement = (Advertisement *) user_data;
+    g_assert(advertisement != NULL);
 
     GError *error = NULL;
-    GVariant *value = g_dbus_connection_call_finish(adapter->connection, res, &error);
+    GVariant *value = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
     if (value != NULL) {
         g_variant_unref(value);
     }
 
     if (error != NULL) {
         log_error(TAG, "failed to register advertisement (error %d: %s)", error->code, error->message);
+        binc_advertisement_set_active(advertisement, FALSE);
         g_clear_error(&error);
     } else {
-        log_debug(TAG, "started advertising (%s)", adapter->address);
+        log_debug(TAG, "started advertising (%s)", binc_advertisement_get_path(advertisement));
     }
 }
 
@@ -1122,7 +1124,14 @@ void binc_adapter_start_advertising(Adapter *adapter, Advertisement *advertiseme
     g_assert(advertisement != NULL);
 
     adapter->advertisement = advertisement;
+    if (binc_advertisement_is_active(advertisement)) {
+        // BlueZ keeps advertising it (also across connections); registering it again would
+        // only fail with AlreadyExists. To change its contents, stop and start it.
+        log_debug(TAG, "already advertising");
+        return;
+    }
     binc_advertisement_register(advertisement, adapter);
+    binc_advertisement_set_active(advertisement, TRUE);
 
     g_dbus_connection_call(binc_adapter_get_dbus_connection(adapter),
                            "org.bluez",
@@ -1134,7 +1143,7 @@ void binc_adapter_start_advertising(Adapter *adapter, Advertisement *advertiseme
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
                            NULL,
-                           (GAsyncReadyCallback) binc_internal_start_advertising_cb, adapter);
+                           (GAsyncReadyCallback) binc_internal_start_advertising_cb, advertisement);
 }
 
 static void binc_internal_stop_advertising_cb(__attribute__((unused)) GObject *source_object,
@@ -1154,7 +1163,6 @@ static void binc_internal_stop_advertising_cb(__attribute__((unused)) GObject *s
         log_error(TAG, "failed to unregister advertisement (error %d: %s)", error->code, error->message);
         g_clear_error(&error);
     } else {
-        binc_advertisement_unregister(adapter->advertisement, adapter);
         log_debug(TAG, "stopped advertising");
     }
 
@@ -1164,6 +1172,7 @@ void binc_adapter_stop_advertising(Adapter *adapter, Advertisement *advertisemen
     g_assert(adapter != NULL);
     g_assert(advertisement != NULL);
 
+    binc_advertisement_set_active(advertisement, FALSE);
     g_dbus_connection_call(binc_adapter_get_dbus_connection(adapter),
                            "org.bluez",
                            adapter->path,
@@ -1175,6 +1184,10 @@ void binc_adapter_stop_advertising(Adapter *adapter, Advertisement *advertisemen
                            -1,
                            NULL,
                            (GAsyncReadyCallback) binc_internal_stop_advertising_cb, adapter);
+    // Unexport now rather than in the reply: a start right after this stop (to change the
+    // advertisement) exports it again, and a late unexport would remove that new export.
+    // D-Bus keeps call order, so BlueZ has handled the unregister before any new register.
+    binc_advertisement_unregister(advertisement, adapter);
 }
 
 static void binc_internal_register_appl_cb(__attribute__((unused)) GObject *source_object,

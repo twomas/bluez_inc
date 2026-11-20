@@ -22,6 +22,7 @@
  */
 
 #include "advertisement.h"
+#include "advertisement_internal.h"
 #include "adapter.h"
 #include "logger.h"
 #include "utility.h"
@@ -38,6 +39,7 @@ struct binc_advertisement {
     GHashTable *service_data; // Owned
     GHashTable *scan_response_service_data; // Owned
     guint registration_id;
+    gboolean active;
     guint32 min_interval;
     gboolean min_interval_enabled;
     guint32 max_interval;
@@ -185,11 +187,20 @@ static void advertisement_method_call(__attribute__((unused)) GDBusConnection *c
                                       __attribute__((unused)) const gchar *sender,
                                       __attribute__((unused)) const gchar *path,
                                       __attribute__((unused)) const gchar *interface,
-                                      __attribute__((unused)) const gchar *method,
+                                      const gchar *method,
                                       __attribute__((unused)) GVariant *params,
-                                      __attribute__((unused)) GDBusMethodInvocation *invocation,
+                                      GDBusMethodInvocation *invocation,
                                       void *userdata) {
-    log_debug(TAG, "advertisement method called");
+    Advertisement *advertisement = (Advertisement *) userdata;
+    if (g_str_equal(method, "Release")) {
+        // BlueZ dropped the advertisement (e.g. the adapter went away): it has to be
+        // registered again before it is broadcast.
+        log_debug(TAG, "advertisement released by BlueZ");
+        advertisement->active = FALSE;
+    } else {
+        log_debug(TAG, "advertisement method '%s' called", method);
+    }
+    g_dbus_method_invocation_return_value(invocation, NULL);
 }
 
 static const GDBusInterfaceVTable advertisement_method_table = {
@@ -201,6 +212,11 @@ void binc_advertisement_register(Advertisement *advertisement, const Adapter *ad
     g_assert(advertisement != NULL);
     g_assert(adapter != NULL);
 
+    if (advertisement->registration_id != 0) {
+        // Still exported (e.g. after BlueZ released it): export it again, so the interface
+        // lists the properties set since then.
+        binc_advertisement_unregister(advertisement, adapter);
+    }
     log_debug(TAG, "binc_advertisement_register_dynamic");
 
     // Use a GString to build the XML dynamically
@@ -314,11 +330,23 @@ void binc_advertisement_unregister(Advertisement *advertisement, const Adapter *
     g_assert(advertisement != NULL);
     g_assert(adapter != NULL);
 
+    if (advertisement->registration_id == 0) return;
     gboolean result = g_dbus_connection_unregister_object(binc_adapter_get_dbus_connection(adapter),
                                                           advertisement->registration_id);
     if (!result) {
         log_debug(TAG, "failed to unregister advertisement");
     }
+    advertisement->registration_id = 0;
+}
+
+gboolean binc_advertisement_is_active(const Advertisement *advertisement) {
+    g_assert(advertisement != NULL);
+    return advertisement->active;
+}
+
+void binc_advertisement_set_active(Advertisement *advertisement, gboolean active) {
+    g_assert(advertisement != NULL);
+    advertisement->active = active;
 }
 
 static void byte_array_free(GByteArray *byteArray) { g_byte_array_free(byteArray, TRUE); }
