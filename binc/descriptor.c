@@ -47,6 +47,7 @@ struct binc_descriptor {
     const char *char_path; // Owned
     const char *uuid; // Owned
     GList *flags; // Owned
+    GCancellable *cancellable; // Owned. Cancelled on free, so pending D-Bus calls never use a freed descriptor
 
     OnDescReadCallback on_read_cb;
     OnDescWriteCallback on_write_cb;
@@ -61,11 +62,16 @@ Descriptor *binc_descriptor_create(Device *device, const char *path) {
     descriptor->device = device;
     descriptor->connection = binc_device_get_dbus_connection(device);
     descriptor->path = g_strdup(path);
+    descriptor->cancellable = g_cancellable_new();
     return descriptor;
 }
 
 void binc_descriptor_free(Descriptor *descriptor) {
     g_assert(descriptor != NULL);
+
+    g_cancellable_cancel(descriptor->cancellable);
+    g_object_unref(descriptor->cancellable);
+    descriptor->cancellable = NULL;
 
     if (descriptor->flags != NULL) {
         g_list_free_full(descriptor->flags, g_free);
@@ -158,7 +164,8 @@ static void binc_internal_descriptor_read_cb(GObject *source_object, GAsyncResul
     Descriptor *descriptor = (Descriptor *) user_data;
     g_assert(descriptor != NULL);
 
-    GVariant *value = g_dbus_connection_call_finish(descriptor->connection, res, &error);
+    GVariant *value = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+    if (binc_call_was_cancelled(&error)) return;
     if (value != NULL) {
         g_assert(g_str_equal(g_variant_get_type_string(value), "(ay)"));
         innerArray = g_variant_get_child_value(value, 0);
@@ -208,7 +215,7 @@ void binc_descriptor_read(Descriptor *descriptor) {
                            G_VARIANT_TYPE("(ay)"),
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
-                           NULL,
+                           descriptor->cancellable,
                            (GAsyncReadyCallback) binc_internal_descriptor_read_cb,
                            descriptor);
 }
@@ -225,7 +232,12 @@ static void binc_internal_descriptor_write_cb(GObject *source_object, GAsyncResu
 
     GByteArray *byteArray = NULL;
     GError *error = NULL;
-    GVariant *value = g_dbus_connection_call_finish(descriptor->connection, res, &error);
+    GVariant *value = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+    if (binc_call_was_cancelled(&error)) {
+        g_variant_unref(writeData->value);
+        g_free(writeData);
+        return;
+    }
 
     if (writeData->value != NULL) {
         byteArray = g_variant_get_byte_array(writeData->value);
@@ -282,7 +294,7 @@ void binc_descriptor_write(Descriptor *descriptor, const GByteArray *byteArray) 
                            NULL,
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
-                           NULL,
+                           descriptor->cancellable,
                            (GAsyncReadyCallback) binc_internal_descriptor_write_cb,
                            writeData);
 }

@@ -22,6 +22,7 @@
  */
 
 #include <sys/time.h>
+#include <gio/gio.h>
 #include "utility.h"
 #include "math.h"
 
@@ -160,4 +161,10 @@ char* random_string(gsize length) {
     }
 
     return g_string_free(string, FALSE);
+}
+
+gboolean binc_call_was_cancelled(GError **error) {
+    if (!g_error_matches(*error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) return FALSE;
+    g_clear_error(error);
+    return TRUE;
 }

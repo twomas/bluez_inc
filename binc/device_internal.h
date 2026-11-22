@@ -32,6 +32,9 @@ void binc_device_free(Device *device);
 
 GDBusConnection *binc_device_get_dbus_connection(const Device *device);
 
+// Cancelled when the device is freed; pass it to D-Bus calls whose callback uses the device.
+GCancellable *binc_device_get_cancellable(const Device *device);
+
 void binc_device_set_address(Device *device, const char *address);
 
 void binc_device_set_address_type(Device *device, const char *address_type);

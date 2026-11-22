@@ -50,6 +50,13 @@ char* replace_char(char* str, char find, char replace);
 
 char* random_string(gsize length);
 
+/*
+ * For the callback of a D-Bus call made with an object's GCancellable: TRUE when the call was
+ * cancelled because that object was freed. The error is cleared; the callback must then return
+ * without touching its user_data.
+ */
+gboolean binc_call_was_cancelled(GError **error);
+
 #ifdef __cplusplus
 }
 #endif

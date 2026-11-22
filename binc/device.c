@@ -90,6 +90,7 @@ struct binc_device {
     guint mtu;
 
     guint device_prop_changed;
+    GCancellable *cancellable; // Owned. Cancelled on free, so pending D-Bus calls never use a freed device
     ConnectionStateChangedCallback connection_state_callback;
     ServicesResolvedCallback services_resolved_callback;
     BondingStateChangedCallback bonding_state_callback;
@@ -125,6 +126,7 @@ Device *binc_device_create(const char *path, Adapter *adapter) {
     device->txpower = -255;
     device->mtu = 23;
     device->user_data = NULL;
+    device->cancellable = g_cancellable_new();
     return device;
 }
 
@@ -159,6 +161,12 @@ void binc_device_free(Device *device) {
     g_assert(device != NULL);
 
     log_debug(TAG, "freeing %s", device->path);
+
+    // BlueZ can remove a device while calls for it are pending (a temporary device that is
+    // connecting, say). Their callbacks then see G_IO_ERROR_CANCELLED and leave it alone.
+    g_cancellable_cancel(device->cancellable);
+    g_object_unref(device->cancellable);
+    device->cancellable = NULL;
 
     if (device->device_prop_changed != 0) {
         g_dbus_connection_signal_unsubscribe(device->connection, device->device_prop_changed);
@@ -436,7 +444,7 @@ static void binc_internal_extract_descriptor(Device *device, const char *object_
     }
 }
 
-static void binc_internal_collect_gatt_tree_cb(__attribute__((unused)) GObject *source_object,
+static void binc_internal_collect_gatt_tree_cb(GObject *source_object,
                                                GAsyncResult *res,
                                                gpointer user_data) {
 
@@ -444,7 +452,8 @@ static void binc_internal_collect_gatt_tree_cb(__attribute__((unused)) GObject *
     Device *device = (Device *) user_data;
     g_assert(device != NULL);
 
-    GVariant *result = g_dbus_connection_call_finish(device->connection, res, &error);
+    GVariant *result = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+    if (binc_call_was_cancelled(&error)) return;
 
     if (result == NULL) {
         log_error(TAG, "Unable to get result for GetManagedObjects");
@@ -528,7 +537,7 @@ static void binc_collect_gatt_tree(Device *device) {
                            G_VARIANT_TYPE("(a{oa{sa{sv}}})"),
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
-                           NULL,
+                           device->cancellable,
                            (GAsyncReadyCallback) binc_internal_collect_gatt_tree_cb,
                            device);
 }
@@ -612,7 +621,7 @@ static void binc_device_changed(__attribute__((unused)) GDBusConnection *conn,
         g_variant_iter_free(properties_invalidated);
 }
 
-static void binc_internal_device_connect_cb(__attribute__((unused)) GObject *source_object,
+static void binc_internal_device_connect_cb(GObject *source_object,
                                             GAsyncResult *res,
                                             gpointer user_data) {
 
@@ -620,7 +629,8 @@ static void binc_internal_device_connect_cb(__attribute__((unused)) GObject *sou
     Device *device = (Device *) user_data;
     g_assert(device != NULL);
 
-    GVariant *value = g_dbus_connection_call_finish(device->connection, res, &error);
+    GVariant *value = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+    if (binc_call_was_cancelled(&error)) return;
     if (value != NULL) {
         g_variant_unref(value);
     }
@@ -672,12 +682,12 @@ void binc_device_connect(Device *device) {
                            NULL,
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
-                           NULL,
+                           device->cancellable,
                            (GAsyncReadyCallback) binc_internal_device_connect_cb,
                            device);
 }
 
-static void binc_internal_device_pair_cb(__attribute__((unused)) GObject *source_object,
+static void binc_internal_device_pair_cb(GObject *source_object,
                                          GAsyncResult *res,
                                          gpointer user_data) {
 
@@ -685,7 +695,8 @@ static void binc_internal_device_pair_cb(__attribute__((unused)) GObject *source
     g_assert(device != NULL);
 
     GError *error = NULL;
-    GVariant *value = g_dbus_connection_call_finish(device->connection, res, &error);
+    GVariant *value = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+    if (binc_call_was_cancelled(&error)) return;
     if (value != NULL) {
         g_variant_unref(value);
     }
@@ -721,12 +732,12 @@ void binc_device_pair(Device *device) {
                            NULL,
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
-                           NULL,
+                           device->cancellable,
                            (GAsyncReadyCallback) binc_internal_device_pair_cb,
                            device);
 }
 
-static void binc_internal_device_disconnect_cb(__attribute__((unused)) GObject *source_object,
+static void binc_internal_device_disconnect_cb(GObject *source_object,
                                                GAsyncResult *res,
                                                gpointer user_data) {
 
@@ -734,7 +745,8 @@ static void binc_internal_device_disconnect_cb(__attribute__((unused)) GObject *
     g_assert(device != NULL);
 
     GError *error = NULL;
-    GVariant *value = g_dbus_connection_call_finish(device->connection, res, &error);
+    GVariant *value = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+    if (binc_call_was_cancelled(&error)) return;
     if (value != NULL) {
         g_variant_unref(value);
     }
@@ -768,7 +780,7 @@ void binc_device_disconnect(Device *device) {
                            NULL,
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
-                           NULL,
+                           device->cancellable,
                            (GAsyncReadyCallback) binc_internal_device_disconnect_cb,
                            device);
 }
@@ -1140,6 +1152,11 @@ gboolean binc_device_is_central(const Device *device) {
 GDBusConnection *binc_device_get_dbus_connection(const Device *device) {
     g_assert(device != NULL);
     return device->connection;
+}
+
+GCancellable *binc_device_get_cancellable(const Device *device) {
+    g_assert(device != NULL);
+    return device->cancellable;
 }
 
 BondingState binc_device_get_bonding_state(const Device *device) {

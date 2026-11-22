@@ -56,6 +56,7 @@ struct binc_characteristic {
     guint mtu;
 
     guint characteristic_prop_changed;
+    GCancellable *cancellable; // Owned. Cancelled on free, so pending D-Bus calls never use a freed characteristic
     OnNotifyingStateChangedCallback notify_state_callback;
     OnReadCallback on_read_callback;
     OnWriteCallback on_write_callback;
@@ -72,11 +73,17 @@ Characteristic *binc_characteristic_create(Device *device, const char *path) {
     characteristic->connection = binc_device_get_dbus_connection(device);
     characteristic->path = g_strdup(path);
     characteristic->mtu = 23;
+    characteristic->cancellable = g_cancellable_new();
     return characteristic;
 }
 
 void binc_characteristic_free(Characteristic *characteristic) {
     g_assert(characteristic != NULL);
+
+    // Freed with its device, or when the GATT tree is read again, maybe with calls pending.
+    g_cancellable_cancel(characteristic->cancellable);
+    g_object_unref(characteristic->cancellable);
+    characteristic->cancellable = NULL;
 
     if (characteristic->characteristic_prop_changed != 0) {
         g_dbus_connection_signal_unsubscribe(characteristic->connection, characteristic->characteristic_prop_changed);
@@ -132,7 +139,7 @@ char *binc_characteristic_to_string(const Characteristic *characteristic) {
     return result;
 }
 
-static void binc_internal_char_read_cb(__attribute__((unused)) GObject *source_object,
+static void binc_internal_char_read_cb(GObject *source_object,
                                        GAsyncResult *res,
                                        gpointer user_data) {
     GError *error = NULL;
@@ -141,7 +148,8 @@ static void binc_internal_char_read_cb(__attribute__((unused)) GObject *source_o
     Characteristic *characteristic = (Characteristic *) user_data;
     g_assert(characteristic != NULL);
 
-    GVariant *value = g_dbus_connection_call_finish(characteristic->connection, res, &error);
+    GVariant *value = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+    if (binc_call_was_cancelled(&error)) return;
     if (value != NULL) {
         g_assert(g_str_equal(g_variant_get_type_string(value), "(ay)"));
         innerArray = g_variant_get_child_value(value, 0);
@@ -192,12 +200,12 @@ void binc_characteristic_read(Characteristic *characteristic) {
                            G_VARIANT_TYPE("(ay)"),
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
-                           NULL,
+                           characteristic->cancellable,
                            (GAsyncReadyCallback) binc_internal_char_read_cb,
                            characteristic);
 }
 
-static void binc_internal_char_write_cb(__attribute__((unused)) GObject *source_object,
+static void binc_internal_char_write_cb(GObject *source_object,
                                         GAsyncResult *res,
                                         gpointer user_data) {
     WriteData *writeData = (WriteData*) user_data;
@@ -206,7 +214,12 @@ static void binc_internal_char_write_cb(__attribute__((unused)) GObject *source_
 
     GByteArray *byteArray = NULL;
     GError *error = NULL;
-    GVariant *value = g_dbus_connection_call_finish(characteristic->connection, res, &error);
+    GVariant *value = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+    if (binc_call_was_cancelled(&error)) {
+        g_variant_unref(writeData->value);
+        g_free(writeData);
+        return;
+    }
 
     if (writeData->value != NULL) {
         byteArray = g_variant_get_byte_array(writeData->value);
@@ -266,7 +279,7 @@ void binc_characteristic_write(Characteristic *characteristic, const GByteArray 
                            NULL,
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
-                           NULL,
+                           characteristic->cancellable,
                            (GAsyncReadyCallback) binc_internal_char_write_cb,
                            writeData);
 }
@@ -327,7 +340,7 @@ static void binc_internal_signal_characteristic_changed(__attribute__((unused)) 
     }
 }
 
-static void binc_internal_char_start_notify_cb(__attribute__((unused)) GObject *source_object,
+static void binc_internal_char_start_notify_cb(GObject *source_object,
                                                GAsyncResult *res,
                                                gpointer user_data) {
 
@@ -335,7 +348,8 @@ static void binc_internal_char_start_notify_cb(__attribute__((unused)) GObject *
     g_assert(characteristic != NULL);
 
     GError *error = NULL;
-    GVariant *value = g_dbus_connection_call_finish(characteristic->connection, res, &error);
+    GVariant *value = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+    if (binc_call_was_cancelled(&error)) return;
     if (value != NULL) {
         g_variant_unref(value);
     }
@@ -381,7 +395,7 @@ void binc_characteristic_start_notify(Characteristic *characteristic) {
                            NULL,
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
-                           NULL,
+                           characteristic->cancellable,
                            (GAsyncReadyCallback) binc_internal_char_start_notify_cb,
                            characteristic);
 }
@@ -391,7 +405,8 @@ static void binc_internal_char_stop_notify_cb(GObject *source_object, GAsyncResu
     g_assert(characteristic != NULL);
 
     GError *error = NULL;
-    GVariant *value = g_dbus_connection_call_finish(characteristic->connection, res, &error);
+    GVariant *value = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+    if (binc_call_was_cancelled(&error)) return;
     if (value != NULL) {
         g_variant_unref(value);
     }
@@ -420,7 +435,7 @@ void binc_characteristic_stop_notify(Characteristic *characteristic) {
                            NULL,
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
-                           NULL,
+                           characteristic->cancellable,
                            (GAsyncReadyCallback) binc_internal_char_stop_notify_cb,
                            characteristic);
 }

@@ -415,7 +415,7 @@ static void binc_internal_device_appeared(__attribute__((unused)) GDBusConnectio
         g_variant_iter_free(interfaces);
 }
 
-static void binc_internal_device_getall_properties_cb(__attribute__((unused)) GObject *source_object,
+static void binc_internal_device_getall_properties_cb(GObject *source_object,
                                                       GAsyncResult *res,
                                                       gpointer user_data) {
 
@@ -423,7 +423,8 @@ static void binc_internal_device_getall_properties_cb(__attribute__((unused)) GO
     g_assert(device != NULL);
 
     GError *error = NULL;
-    GVariant *result = g_dbus_connection_call_finish(binc_device_get_dbus_connection(device), res, &error);
+    GVariant *result = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+    if (binc_call_was_cancelled(&error)) return;
 
     if (error != NULL) {
         log_error(TAG, "failed to call '%s' (error %d: %s)", "GetAll", error->code, error->message);
@@ -459,7 +460,7 @@ static void binc_internal_device_getall_properties(Adapter *adapter, Device *dev
                            G_VARIANT_TYPE("(a{sv})"),
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
-                           NULL,
+                           binc_device_get_cancellable(device),
                            (GAsyncReadyCallback) binc_internal_device_getall_properties_cb,
                            device);
 }
